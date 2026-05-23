@@ -27,4 +27,4 @@ local.properties
 /wrapper/
 
 # Log files
-*.log
+*.logkotlin-profile/
