@@ -1,6 +1,6 @@
 # HypermachHYI
 
-> Android ground station for the **Hypermach Roket Takımı** rocketry team — receives, validates, and displays live HYİ EK-7 telemetry over USB OTG in real time.
+> Android ground station for **Hypermach Roket Takımı** — receives, validates, and displays live HYİ EK-7 telemetry over USB OTG in real time.
 
 ---
 
