@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">Hypermach HYİ</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="telemetry_stream_active">Telemetry stream active</string>
+    <string name="ready_to_connect">Ready to connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="connect_usb">Connect USB</string>
+    <string name="telemetry_overview">Telemetry</string>
+    <string name="team_id">Team ID</string>
+    <string name="packet_count">Packet</string>
+    <string name="altitude">Altitude</string>
+    <string name="rocket_angle">Angle</string>
+    <string name="gps_location">GPS Location</string>
+    <string name="latitude">Latitude</string>
+    <string name="longitude">Longitude</string>
+    <string name="gps_altitude">GPS Altitude</string>
+    <string name="gps_no_fix">No GPS fix — awaiting satellite lock</string>
+    <string name="imu_sensors">IMU Sensors</string>
+    <string name="accelerometer_g">İvmeölçer (g)</string>
+    <string name="gyroscope_dps">Jiroskop (dps)</string>
+    <string name="waiting_for_telemetry">Waiting for first packet…</string>
+    <string name="usb_disconnected">Connect a USB-OTG serial adapter</string>
+    <string name="meters_label">metres</string>
+    <string name="degrees_label">degrees</string>
+</resources>
