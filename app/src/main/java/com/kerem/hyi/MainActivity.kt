@@ -293,7 +293,7 @@ class MainActivity : ComponentActivity() {
                         PendingIntent.FLAG_UPDATE_CURRENT
                     }
                     val permIntent = PendingIntent.getBroadcast(
-                        this@MainActivity, 0, Intent(ACTION_USB_PERMISSION), flags
+                        this@MainActivity, 0, Intent(ACTION_USB_PERMISSION).setPackage(packageName), flags
                     )
                     if (!isReceiverRegistered) {
                         val filter = IntentFilter(ACTION_USB_PERMISSION)
@@ -301,7 +301,7 @@ class MainActivity : ComponentActivity() {
                             this@MainActivity,
                             usbReceiver,
                             filter,
-                            ContextCompat.RECEIVER_EXPORTED
+                            ContextCompat.RECEIVER_NOT_EXPORTED
                         )
                         isReceiverRegistered = true
                     }
