@@ -19,8 +19,38 @@
     <string name="imu_sensors">IMU Sensörleri</string>
     <string name="accelerometer_g">İvmeölçer (g)</string>
     <string name="gyroscope_dps">Jiroskop (dps)</string>
+    <string name="unit_g">g</string>
+    <string name="unit_dps">dps</string>
     <string name="waiting_for_telemetry">İlk paket bekleniyor…</string>
     <string name="usb_disconnected">Bir USB-OTG seri adaptör bağlayın</string>
     <string name="meters_label">metre</string>
     <string name="degrees_label">derece</string>
+    <string name="usb_permission_denied">USB İzni Reddedildi</string>
+    <string name="export_successful">Dışa aktarma başarılı</string>
+    <string name="export_failed">Dışa aktarma başarısız: %1$s</string>
+    <string name="no_data_to_export">Dışa aktarılacak veri yok</string>
+    <string name="altitude_tared">İrtifa Sıfırlandı: %1$.2fm</string>
+    <string name="no_usb_device_found">Bağlı USB aygıtı bulunamadı</string>
+    <string name="accel_placeholder">IVME ---</string>
+    <string name="gyro_placeholder">GYRO ---</string>
+    <string name="no_data">VERI YOK</string>
+    <string name="link_ok">BAGLANTI İYİ</string>
+    <string name="link_degraded">BAGLANTI ZAYIF</string>
+    <string name="link_poor">BAGLANTI KÖTÜ</string>
+    <string name="valid_label">GEÇERLI</string>
+    <string name="bad_label">HATALI</string>
+    <string name="pps_label">PKT/SN</string>
+    <string name="max_altitude_label">MAX %1$.2f m</string>
+    <string name="accel_label">IVME</string>
+    <string name="gyro_label">GYRO</string>
+    <string name="connection_details_placeholder">19200 baud · 8N1 · HYİ EK-7</string>
+    <string name="placeholder_dash">---</string>
+    <string name="export_csv_description">CSV Dışa Aktar</string>
+    <string name="tare_altitude_description">İrtifayı Sıfırla</string>
+
+    <!-- Update Checker -->
+    <string name="update_available_title">Güncelleme Mevcut</string>
+    <string name="update_available_message">Hypermach HYİ\'nin yeni bir versiyonu (%1$s) mevcut. Güncellemek ister misiniz?</string>
+    <string name="update_button">Güncelle</string>
+    <string name="dismiss_button">Kapat</string>
 </resources>

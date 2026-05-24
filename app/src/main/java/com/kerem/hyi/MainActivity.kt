@@ -1,6 +1,5 @@
 package com.kerem.hyi
 
-import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -9,11 +8,15 @@ import android.content.IntentFilter
 import android.content.res.Configuration
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import androidx.core.net.toUri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.ReportDrawnWhen
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -22,17 +25,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
@@ -47,7 +49,10 @@ import androidx.compose.ui.unit.sp
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.kerem.hyi.ui.theme.HypermachHYITheme
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Job
@@ -63,9 +68,10 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var usbSerialManager: UsbSerialManager
+    private val usbSerialManager by lazy { UsbSerialManager(this) }
     private val sessionManager = TelemetrySessionManager()
     private var isReceiverRegistered = false
+    private var isReady by mutableStateOf(value = false)
 
     // Session-level stats tracked in the Activity and exposed as flows
     private val _validPackets  = MutableStateFlow(0)
@@ -77,9 +83,12 @@ class MainActivity : ComponentActivity() {
     private var pktCountWindow = 0
     private var windowStartMs  = System.currentTimeMillis()
     private var ppsTimeoutJob: Job? = null
-    
+
     // Calibration
     private val _altitudeOffset = MutableStateFlow(0f)
+
+    // Update state
+    private var updateInfo by mutableStateOf<UpdateInfo?>(null)
 
     companion object {
         private const val ACTION_USB_PERMISSION = "com.kerem.hyi.USB_PERMISSION"
@@ -97,7 +106,7 @@ class MainActivity : ComponentActivity() {
                 if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                     device?.let { usbSerialManager.connectDevice(it) }
                 } else {
-                    Toast.makeText(context, "USB Permission Denied", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, getString(R.string.usb_permission_denied), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -105,34 +114,132 @@ class MainActivity : ComponentActivity() {
 
     private val createCsvLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         uri?.let {
-            try {
-                contentResolver.openOutputStream(it)?.use { stream ->
-                    stream.write(sessionManager.getCsvContent().toByteArray())
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    contentResolver.openOutputStream(it)?.use { stream ->
+                        stream.write(sessionManager.getCsvContent().toByteArray())
+                    }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, getString(R.string.export_successful), Toast.LENGTH_SHORT).show()
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, getString(R.string.export_failed, ""), Toast.LENGTH_LONG).show()
+                    }
                 }
-                Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
-        usbSerialManager = UsbSerialManager(this)
+
+        // Keep system splash screen visible until Dashboard is ready
+        splashScreen.setKeepOnScreenCondition { !isReady }
 
         // Keep screen on during telemetry session
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // Pre-setup telemetry (non-blocking)
+        setupTelemetryHandling()
+
+        // Check for updates
+        lifecycleScope.launch(Dispatchers.IO) {
+            // Using a fallback if BuildConfig is not yet available to the analyzer
+            val currentVersion = try {
+                val pInfo = packageManager.getPackageInfo(packageName, 0)
+                pInfo.versionName ?: "1.0"
+            } catch (_: Exception) {
+                "1.0"
+            }
+            val info = UpdateChecker.checkForUpdates(currentVersion)
+            withContext(Dispatchers.Main) {
+                updateInfo = info
+            }
+        }
+
+        setContent {
+            HypermachHYITheme(dynamicColor = false) {
+                Surface(modifier = Modifier.fillMaxSize(), color = SurfaceDark) {
+                    ReportDrawnWhen { isReady }
+
+                    DashboardScreen(
+                        usbManager    = usbSerialManager,
+                        validPackets  = _validPackets,
+                        badPackets    = _badPackets,
+                        packetsPerSec = _packetsPerSec,
+                        maxAltitude   = _maxAltitude,
+                        onConnect     = { handleUsbConnectionAttempt() },
+                        onDisconnect  = {
+                            usbSerialManager.closePortSafely()
+                            resetSessionStats()
+                            sessionManager.clearSession()
+                        },
+                        onExportCsv   = {
+                            if (sessionManager.isSessionEmpty()) {
+                                Toast.makeText(this@MainActivity, getString(R.string.no_data_to_export), Toast.LENGTH_SHORT).show()
+                            } else {
+                                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                                createCsvLauncher.launch("hyi_log_$ts.csv")
+                            }
+                            },
+                    ) {
+                        val currentRawAlt = usbSerialManager.telemetryState.value?.altitude ?: 0f
+                        _altitudeOffset.value = currentRawAlt
+                        _maxAltitude.value = 0f // Reset max on new baseline
+                        Toast.makeText(this@MainActivity, getString(R.string.altitude_tared, currentRawAlt), Toast.LENGTH_SHORT).show()
+                    }
+
+                    // Update Dialog
+                    updateInfo?.let { info ->
+                        AlertDialog(
+                            onDismissRequest = { updateInfo = null },
+                            title = { Text(stringResource(R.string.update_available_title)) },
+                            text = { Text(stringResource(R.string.update_available_message, info.latestVersion)) },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_VIEW, info.downloadUrl.toUri())
+                                        startActivity(intent)
+                                        updateInfo = null
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.update_button))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { updateInfo = null }) {
+                                    Text(stringResource(R.string.dismiss_button))
+                                }
+                            },
+                            containerColor = CardDark,
+                            titleContentColor = CyanAccent,
+                            textContentColor = TextPrimary
+                        )
+                    }
+
+                    // Signal ready after first composition of the dashboard
+                    LaunchedEffect(Unit) {
+                        isReady = true
+                    }
+                }
+            }
+        }
+    }
+
+    private fun setupTelemetryHandling() {
         // Hook into incoming packets to update session stats
         usbSerialManager.setOnPacketReceived { telemetry, isValid ->
-            if (isValid && telemetry != null) {
+            if (isValid && (telemetry != null)) {
                 // Apply altitude tare
                 val calibratedAlt = telemetry.altitude - _altitudeOffset.value
                 val calibratedData = telemetry.copy(altitude = calibratedAlt)
 
                 sessionManager.addRecord(calibratedData)
                 _validPackets.value++
-                
+
                 if (calibratedData.altitude > _maxAltitude.value) {
                     _maxAltitude.value = calibratedData.altitude
                 }
@@ -140,7 +247,7 @@ class MainActivity : ComponentActivity() {
                 val now = System.currentTimeMillis()
                 val elapsed = now - windowStartMs
                 if (elapsed >= 1000L) {
-                    _packetsPerSec.value = pktCountWindow * 1000f / elapsed
+                    _packetsPerSec.value = (pktCountWindow * 1000f) / elapsed
                     pktCountWindow = 0
                     windowStartMs = now
                 }
@@ -155,40 +262,6 @@ class MainActivity : ComponentActivity() {
                 _badPackets.value++
             }
         }
-
-        setContent {
-            HypermachHYITheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-    DashboardScreen(
-        usbManager    = usbSerialManager,
-        validPackets  = _validPackets,
-        badPackets    = _badPackets,
-        packetsPerSec = _packetsPerSec,
-        maxAltitude   = _maxAltitude,
-        onConnect     = { handleUsbConnectionAttempt() },
-        onDisconnect  = {
-            usbSerialManager.closePortSafely()
-            resetSessionStats()
-            sessionManager.clearSession()
-        },
-        onExportCsv   = { 
-            if (sessionManager.isSessionEmpty()) {
-                Toast.makeText(this, "No data to export", Toast.LENGTH_SHORT).show()
-            } else {
-                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                createCsvLauncher.launch("hyi_log_$ts.csv")
-            }
-        },
-        onTareAltitude = {
-            val currentRawAlt = usbSerialManager.telemetryState.value?.altitude ?: 0f
-            _altitudeOffset.value = currentRawAlt
-            _maxAltitude.value = 0f // Reset max on new baseline
-            Toast.makeText(this, "Altitude Tared to %.2fm".format(currentRawAlt), Toast.LENGTH_SHORT).show()
-        }
-    )
-                }
-            }
-        }
     }
 
     private fun resetSessionStats() {
@@ -200,35 +273,41 @@ class MainActivity : ComponentActivity() {
         windowStartMs        = System.currentTimeMillis()
     }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun handleUsbConnectionAttempt() {
-        val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbSerialManager.usbManager)
-        if (availableDrivers.isEmpty()) {
-            Toast.makeText(this, "No USB device found attached", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val device = availableDrivers[0].device
-        if (usbSerialManager.usbManager.hasPermission(device)) {
-            usbSerialManager.connectDevice(device)
-        } else {
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
-            val permIntent = PendingIntent.getBroadcast(
-                this, 0, Intent(ACTION_USB_PERMISSION), flags
-            )
-            if (!isReceiverRegistered) {
-                val filter = IntentFilter(ACTION_USB_PERMISSION)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
-                } else {
-                    registerReceiver(usbReceiver, filter)
+        lifecycleScope.launch(Dispatchers.Default) {
+            val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbSerialManager.usbManager)
+            if (availableDrivers.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.no_usb_device_found), Toast.LENGTH_SHORT).show()
                 }
-                isReceiverRegistered = true
+                return@launch
             }
-            usbSerialManager.usbManager.requestPermission(device, permIntent)
+            val device = availableDrivers[0].device
+            withContext(Dispatchers.Main) {
+                if (usbSerialManager.usbManager.hasPermission(device)) {
+                    usbSerialManager.connectDevice(device)
+                } else {
+                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val permIntent = PendingIntent.getBroadcast(
+                        this@MainActivity, 0, Intent(ACTION_USB_PERMISSION), flags
+                    )
+                    if (!isReceiverRegistered) {
+                        val filter = IntentFilter(ACTION_USB_PERMISSION)
+                        ContextCompat.registerReceiver(
+                            this@MainActivity,
+                            usbReceiver,
+                            filter,
+                            ContextCompat.RECEIVER_EXPORTED
+                        )
+                        isReceiverRegistered = true
+                    }
+                    usbSerialManager.usbManager.requestPermission(device, permIntent)
+                }
+            }
         }
     }
 
@@ -271,6 +350,7 @@ private val MonoFont      = FontFamily.Monospace
 // Top-level screen composable
 // ─────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     usbManager:    UsbSerialManager,
@@ -308,6 +388,7 @@ fun DashboardScreen(
 // Main content
 // ─────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardContent(
     isConnected:   Boolean,
@@ -323,48 +404,126 @@ fun DashboardContent(
 ) {
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
-    Column(
+    Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(SurfaceDark)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Spacer(Modifier.height(8.dp))
+            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = SurfaceDark,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        // App Logo
+                        Icon(
+                            painter = painterResource(id = R.drawable.hypermach_logo),
+                            contentDescription = null,
+                            tint = Color.Unspecified,
+                            modifier = Modifier.size(24.dp)
+                        )
 
-        // ── Header bar ──────────────────────────────────────────
-        HeaderBar(
-            isConnected   = isConnected,
-            onConnect     = onConnect,
-            onDisconnect  = onDisconnect,
-            onExportCsv   = onExportCsv,
-            onTareAltitude = onTareAltitude,
-        )
+                        Text(
+                            text = if (isConnected) stringResource(R.string.connected).uppercase() else stringResource(R.string.disconnected).uppercase(),
+                            color = if (isConnected) GreenAccent else TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            letterSpacing = 1.sp,
+                        )
+                    }
+                },
+                actions = {
+                    // Tare button
+                    IconButton(
+                        onClick = onTareAltitude,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_tare),
+                            contentDescription = stringResource(R.string.tare_altitude_description),
+                            tint = if (isConnected) AmberAccent.copy(alpha = 0.8f) else TextDim,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
 
-        if (isLandscape) {
-            LandscapeMainContent(
-                telemetry = telemetry,
-                validPackets = validPackets,
-                badPackets = badPackets,
-                packetsPerSec = packetsPerSec,
-                maxAltitude = maxAltitude
-            )
-        } else {
-            PortraitMainContent(
-                telemetry = telemetry,
-                validPackets = validPackets,
-                badPackets = badPackets,
-                packetsPerSec = packetsPerSec,
-                maxAltitude = maxAltitude
+                    Spacer(Modifier.width(5.dp))
+
+                    // Export button
+                    IconButton(
+                        onClick = onExportCsv,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_download),
+                            contentDescription = stringResource(R.string.export_csv_description),
+                            tint = if (isConnected) CyanAccent.copy(alpha = 0.8f) else TextDim,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(3.dp))
+
+                    // Connect / Disconnect button
+                    val btnColor = if (isConnected) RedAccent else GreenAccent
+                    OutlinedButton(
+                        onClick = if (isConnected) onDisconnect else onConnect,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = btnColor),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, btnColor.copy(alpha = 0.6f)),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
+                        modifier = Modifier.height(38.dp)
+                    ) {
+                        Text(
+                            text = if (isConnected) stringResource(R.string.disconnect).uppercase() else stringResource(R.string.connect_usb).uppercase(),
+                            fontFamily = MonoFont,
+                            fontSize = 12.sp,
+                            letterSpacing = 1.2.sp,
+                        )
+                    }
+                },
+                scrollBehavior = scrollBehavior,
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = SurfaceDark,
+                    scrolledContainerColor = SurfaceDark,
+                )
             )
         }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Divider below header
+            HorizontalDivider(color = DividerColor)
 
-        if (telemetry != null) {
-            // ── Metadata footer ─────────────────────────────────
-            MetadataFooter(telemetry)
+            if (isLandscape) {
+                LandscapeMainContent(
+                    telemetry = telemetry,
+                    validPackets = validPackets,
+                    badPackets = badPackets,
+                    packetsPerSec = packetsPerSec,
+                    maxAltitude = maxAltitude
+                )
+            } else {
+                PortraitMainContent(
+                    telemetry = telemetry,
+                    validPackets = validPackets,
+                    badPackets = badPackets,
+                    packetsPerSec = packetsPerSec,
+                    maxAltitude = maxAltitude
+                )
+            }
+
+            if (telemetry != null) {
+                // ── Metadata footer ─────────────────────────────────
+                MetadataFooter(telemetry)
+            } else {
+                // Potential placeholder or empty space if needed
+            }
         }
     }
 }
@@ -377,28 +536,30 @@ fun PortraitMainContent(
     packetsPerSec: Float,
     maxAltitude: Float
 ) {
-    // ── Link quality strip ──────────────────────────────────
-    LinkQualityStrip(
-        validPackets = validPackets,
-        badPackets = badPackets,
-        packetsPerSec = packetsPerSec,
-    )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // ── Link quality strip ──────────────────────────────────
+        LinkQualityStrip(
+            validPackets = validPackets,
+            badPackets = badPackets,
+            packetsPerSec = packetsPerSec,
+        )
 
-    // ── Primary metrics ─────────────────────────────────
-    PrimaryMetricsRow(
-        altitude = telemetry?.altitude,
-        maxAltitude = maxAltitude,
-        angle = telemetry?.angle,
-    )
+        // ── Primary metrics ─────────────────────────────────
+        PrimaryMetricsRow(
+            altitude = telemetry?.altitude,
+            maxAltitude = maxAltitude,
+            angle = telemetry?.angle,
+        )
 
-    if (telemetry != null) {
-        // ── GPS section (only when meaningful) ─────────────
-        GpsSection(telemetry)
+        if (telemetry != null) {
+            // ── GPS section (only when meaningful) ─────────────
+            GpsSection(telemetry)
 
-        // ── IMU section ─────────────────────────────────────
-        ImuSection(telemetry)
-    } else {
-        EmptyStateCard(isConnected = true) // EmptyStateCard inside Scrollable logic
+            // ── IMU section ─────────────────────────────────────
+            ImuSection(telemetry)
+        } else {
+            EmptyStateCard(isConnected = true) // EmptyStateCard inside Scrollable logic
+        }
     }
 }
 
@@ -451,15 +612,15 @@ fun LandscapeMainContent(
                 GyroCard(t = telemetry, modifier = Modifier.weight(1f).fillMaxHeight())
             } else {
                 GsCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    Box(contentAlignment = Alignment.Center) { Text("ACCEL ---", color = TextDim, fontSize = 10.sp) }
+                    Box(contentAlignment = Alignment.Center) { Text(stringResource(R.string.accel_placeholder), color = TextDim, fontSize = 10.sp) }
                 }
                 GsCard(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    Box(contentAlignment = Alignment.Center) { Text("GYRO ---", color = TextDim, fontSize = 10.sp) }
+                    Box(contentAlignment = Alignment.Center) { Text(stringResource(R.string.gyro_placeholder), color = TextDim, fontSize = 10.sp) }
                 }
             }
         }
     }
-    
+
     if (telemetry != null) {
         // GPS Section below for landscape too if it's there
         GpsSection(telemetry)
@@ -481,10 +642,10 @@ fun LinkQualityColumn(
         else -> RedAccent
     }
     val qualityLabel = when {
-        totalPackets == 0 -> "NO DATA"
-        qualityRatio >= 0.95f -> "LINK OK"
-        qualityRatio >= 0.80f -> "LINK DEGRADED"
-        else -> "LINK POOR"
+        totalPackets == 0 -> stringResource(R.string.no_data)
+        qualityRatio >= 0.95f -> stringResource(R.string.link_ok)
+        qualityRatio >= 0.80f -> stringResource(R.string.link_degraded)
+        else -> stringResource(R.string.link_poor)
     }
 
     GsCard(modifier = Modifier.fillMaxHeight()) {
@@ -510,102 +671,13 @@ fun LinkQualityColumn(
             Spacer(Modifier.height(12.dp))
 
             // Three mini stats stacked
-            StatChip(label = "VALID", value = validPackets.toString(), color = GreenAccent)
+            StatChip(label = stringResource(R.string.valid_label), value = validPackets.toString(), color = GreenAccent)
             Spacer(Modifier.height(8.dp))
-            StatChip(label = "BAD", value = badPackets.toString(), color = if (badPackets > 0) RedAccent else TextDim)
+            StatChip(label = stringResource(R.string.bad_label), value = badPackets.toString(), color = if (badPackets > 0) RedAccent else TextDim)
             Spacer(Modifier.height(8.dp))
-            StatChip(label = "PKT/S", value = "%.1f".format(packetsPerSec), color = CyanAccent)
+            StatChip(label = stringResource(R.string.pps_label), value = "%.1f".format(packetsPerSec), color = CyanAccent)
         }
     }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Header bar
-// ─────────────────────────────────────────────────────────────
-
-@Composable
-fun HeaderBar(
-    isConnected:  Boolean,
-    onConnect:    () -> Unit,
-    onDisconnect: () -> Unit,
-    onExportCsv:  () -> Unit,
-    onTareAltitude: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // App Logo
-        Icon(
-            painter = painterResource(id = R.drawable.hypermach_logo),
-            contentDescription = null,
-            tint = Color.Unspecified, 
-            modifier = Modifier.size(24.dp)
-        )
-
-        Spacer(Modifier.width(12.dp))
-
-        Text(
-            text = if (isConnected) stringResource(R.string.connected).uppercase() else stringResource(R.string.disconnected).uppercase(),
-            color = if (isConnected) GreenAccent else TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            letterSpacing = 1.sp,
-        )
-
-        Spacer(Modifier.weight(1f))
-
-        // Tare button
-        IconButton(
-            onClick = onTareAltitude,
-            modifier = Modifier.size(36.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.FilterCenterFocus, // Looks like a tare/zeroing target
-                contentDescription = "Tare Altitude",
-                tint = if (isConnected) AmberAccent.copy(alpha = 0.8f) else TextDim,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Spacer(Modifier.width(4.dp))
-
-        // Export button — only enabled when connected and data exists
-        IconButton(
-            onClick = onExportCsv,
-            modifier = Modifier.size(36.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Download,
-                contentDescription = "Export CSV",
-                tint = if (isConnected) CyanAccent.copy(alpha = 0.8f) else TextDim,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-
-        Spacer(Modifier.width(4.dp))
-
-        // Connect / Disconnect button
-        val btnColor = if (isConnected) RedAccent else GreenAccent
-        OutlinedButton(
-            onClick = if (isConnected) onDisconnect else onConnect,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = btnColor),
-            border = androidx.compose.foundation.BorderStroke(1.dp, btnColor.copy(alpha = 0.6f)),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            modifier = Modifier.height(32.dp)
-        ) {
-            Text(
-                text = if (isConnected) stringResource(R.string.disconnect).uppercase() else stringResource(R.string.connect_usb).uppercase(),
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-                letterSpacing = 1.sp,
-            )
-        }
-    }
-
-    // Divider below header
-    Spacer(Modifier.height(4.dp))
-    HorizontalDivider(color = DividerColor)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -627,10 +699,10 @@ fun LinkQualityStrip(
         else                   -> RedAccent
     }
     val qualityLabel = when {
-        totalPackets == 0      -> "NO DATA"
-        qualityRatio >= 0.95f  -> "LINK OK"
-        qualityRatio >= 0.80f  -> "LINK DEGRADED"
-        else                   -> "LINK POOR"
+        totalPackets == 0      -> stringResource(R.string.no_data)
+        qualityRatio >= 0.95f  -> stringResource(R.string.link_ok)
+        qualityRatio >= 0.80f  -> stringResource(R.string.link_degraded)
+        else                   -> stringResource(R.string.link_poor)
     }
 
     GsCard {
@@ -658,9 +730,9 @@ fun LinkQualityStrip(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatChip(label = "VALID", value = validPackets.toString(), color = GreenAccent)
-                StatChip(label = "BAD", value = badPackets.toString(), color = if (badPackets > 0) RedAccent else TextDim)
-                StatChip(label = "PKT/S", value = "%.1f".format(packetsPerSec), color = CyanAccent)
+                StatChip(label = stringResource(R.string.valid_label), value = validPackets.toString(), color = GreenAccent)
+                StatChip(label = stringResource(R.string.bad_label), value = badPackets.toString(), color = if (badPackets > 0) RedAccent else TextDim)
+                StatChip(label = stringResource(R.string.pps_label), value = "%.1f".format(packetsPerSec), color = CyanAccent)
             }
         }
     }
@@ -704,7 +776,7 @@ fun PrimaryMetricsRow(altitude: Float?, maxAltitude: Float, angle: Float?) {
 
 @Composable
 fun AltitudeCard(altitude: Float?, maxAltitude: Float, modifier: Modifier = Modifier) {
-    val altText = altitude?.let { "%.2f".format(it) } ?: "---"
+    val altText = altitude?.let { "%.2f".format(it) } ?: stringResource(R.string.placeholder_dash)
     GsCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -724,14 +796,14 @@ fun AltitudeCard(altitude: Float?, maxAltitude: Float, modifier: Modifier = Modi
             // Max altitude tracker
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+                    painter = painterResource(id = R.drawable.ic_trending_up),
                     contentDescription = null,
                     tint = AmberAccent,
                     modifier = Modifier.size(12.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = "MAX  ${"%.2f".format(maxAltitude)} m",
+                    text = stringResource(R.string.max_altitude_label, maxAltitude),
                     color = AmberAccent,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
@@ -744,7 +816,7 @@ fun AltitudeCard(altitude: Float?, maxAltitude: Float, modifier: Modifier = Modi
 
 @Composable
 fun AngleCard(angle: Float?, modifier: Modifier = Modifier) {
-    val angleText = angle?.let { "%.1f".format(it) } ?: "---"
+    val angleText = angle?.let { "%.1f".format(it) } ?: stringResource(R.string.placeholder_dash)
     GsCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -777,6 +849,7 @@ fun TiltBar(angle: Float) {
         else           -> RedAccent
     }
     val animatedFill by animateFloatAsState(targetValue = clamped, animationSpec = tween(300), label = "tilt")
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -786,8 +859,13 @@ fun TiltBar(angle: Float) {
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(animatedFill)
+                .fillMaxWidth() // We can't easily use a lambda for width without a custom Layout or drawBehind
                 .fillMaxHeight()
+                .graphicsLayer {
+                    // Using scaleX to animate the bar fill without triggering recomposition/relayout
+                    scaleX = animatedFill
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                }
                 .clip(RoundedCornerShape(2.dp))
                 .background(barColor)
         )
@@ -806,10 +884,10 @@ fun GpsSection(t: TelemetryData) {
         GsCard {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    GpsDataItem(stringResource(R.string.latitude).uppercase(),  "%.6f".format(t.gpsLatitude),  Icons.Default.LocationOn, Modifier.weight(1f))
-                    GpsDataItem(stringResource(R.string.longitude).uppercase(), "%.6f".format(t.gpsLongitude), Icons.Default.LocationOn, Modifier.weight(1f))
+                    GpsDataItem(stringResource(R.string.latitude).uppercase(),  "%.6f".format(t.gpsLatitude),  painterResource(id = R.drawable.ic_location), Modifier.weight(1f))
+                    GpsDataItem(stringResource(R.string.longitude).uppercase(), "%.6f".format(t.gpsLongitude), painterResource(id = R.drawable.ic_location), Modifier.weight(1f))
                 }
-                GpsDataItem(stringResource(R.string.gps_altitude).uppercase(), "%.1f m".format(t.gpsAltitude), Icons.Default.Height, Modifier.fillMaxWidth())
+                GpsDataItem(stringResource(R.string.gps_altitude).uppercase(), "%.1f m".format(t.gpsAltitude), painterResource(id = R.drawable.ic_height), Modifier.fillMaxWidth())
             }
         }
     } else {
@@ -819,7 +897,7 @@ fun GpsSection(t: TelemetryData) {
                 modifier = Modifier.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.GpsOff, contentDescription = null, tint = RedAccent, modifier = Modifier.size(16.dp))
+                Icon(painter = painterResource(id = R.drawable.ic_gps_off), contentDescription = null, tint = RedAccent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(10.dp))
                 Text(
                     text = stringResource(R.string.gps_no_fix),
@@ -833,9 +911,9 @@ fun GpsSection(t: TelemetryData) {
 }
 
 @Composable
-fun GpsDataItem(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
+fun GpsDataItem(label: String, value: String, painter: androidx.compose.ui.graphics.painter.Painter, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(14.dp))
+        Icon(painter, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(14.dp))
         Spacer(Modifier.width(6.dp))
         Column {
             Text(label, color = TextDim, fontFamily = MonoFont, fontSize = 8.sp, letterSpacing = 0.5.sp)
@@ -856,8 +934,8 @@ fun AccelCard(t: TelemetryData, modifier: Modifier = Modifier) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            SectionLabel("ACCEL", PurpleAccent)
-            Text("g", color = TextDim, fontFamily = MonoFont, fontSize = 8.sp)
+            SectionLabel(stringResource(R.string.accel_label), PurpleAccent)
+            Text(stringResource(R.string.unit_g), color = TextDim, fontFamily = MonoFont, fontSize = 8.sp)
             ImuAxisRow("X", t.accelX, PurpleAccent)
             ImuAxisRow("Y", t.accelY, PurpleAccent)
             ImuAxisRow("Z", t.accelZ, PurpleAccent)
@@ -873,8 +951,8 @@ fun GyroCard(t: TelemetryData, modifier: Modifier = Modifier) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            SectionLabel("GYRO", CyanAccent)
-            Text("dps", color = TextDim, fontFamily = MonoFont, fontSize = 8.sp)
+            SectionLabel(stringResource(R.string.gyro_label), CyanAccent)
+            Text(stringResource(R.string.unit_dps), color = TextDim, fontFamily = MonoFont, fontSize = 8.sp)
             ImuAxisRow("X", t.gyroX, CyanAccent)
             ImuAxisRow("Y", t.gyroY, CyanAccent)
             ImuAxisRow("Z", t.gyroZ, CyanAccent)
@@ -1005,7 +1083,7 @@ fun EmptyStateCard(isConnected: Boolean) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                imageVector = if (isConnected) Icons.Default.HourglassEmpty else Icons.Default.UsbOff,
+                painter = if (isConnected) painterResource(id = R.drawable.ic_waiting) else painterResource(id = R.drawable.ic_usb_off),
                 contentDescription = null,
                 tint = TextDim,
                 modifier = Modifier.size(40.dp)
@@ -1020,7 +1098,7 @@ fun EmptyStateCard(isConnected: Boolean) {
             if (!isConnected) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "19200 baud · 8N1 · HYİ EK-7",
+                    text = stringResource(R.string.connection_details_placeholder),
                     color = TextDim,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,

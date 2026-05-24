@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.HypermachHYI" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.HypermachHYI" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+    </style>
+
+    <style name="Theme.App.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#0D1117</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/hypermach_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.HypermachHYI</item>
+    </style>
 </resources>

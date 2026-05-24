@@ -52,38 +52,43 @@ class UsbSerialManager(context: Context) {
     private fun startReading() {
         readJob?.cancel()
         readJob = ioScope.launch {
-            val ringBuffer = ByteArray(TelemetryParser.PACKET_SIZE)
-            var bytesInBuffer = 0
-            val readBuffer = ByteArray(2048)
+            val accumulationBuffer = ByteArray(TelemetryParser.PACKET_SIZE * 2)
+            var bytesInAccumulator = 0
+            val readBuffer = ByteArray(4096)
 
             while (isActive) {
                 try {
                     val len = serialPort?.read(readBuffer, 100) ?: 0
-                    if (len > 0) {
-                        for (i in 0 until len) {
-                            // Slide current byte into the buffer
-                            if (bytesInBuffer < TelemetryParser.PACKET_SIZE) {
-                                ringBuffer[bytesInBuffer++] = readBuffer[i]
-                            } else {
-                                System.arraycopy(ringBuffer, 1, ringBuffer, 0, TelemetryParser.PACKET_SIZE - 1)
-                                ringBuffer[TelemetryParser.PACKET_SIZE - 1] = readBuffer[i]
-                            }
+                    if (len <= 0) continue
 
-                            // Look for the 4-byte header: 0xFFFF5452
-                            if (bytesInBuffer == TelemetryParser.PACKET_SIZE) {
-                                if (ringBuffer[0] == 0xFF.toByte() && ringBuffer[1] == 0xFF.toByte() &&
-                                    ringBuffer[2] == 0x54.toByte() && ringBuffer[3] == 0x52.toByte()) {
-                                    
-                                    val telemetry = TelemetryParser.parse(ringBuffer)
-                                    if (telemetry != null) {
-                                        _telemetryState.value = telemetry
-                                        onPacketReceived?.invoke(telemetry, true)
-                                        bytesInBuffer = 0 // Valid packet consumed, start fresh for next
-                                    } else {
-                                        // Header matched but parsing (checksum/footer) failed
-                                        onPacketReceived?.invoke(null, false)
-                                    }
+                    // Process incoming data by moving it through the accumulator
+                    for (i in 0 until len) {
+                        accumulationBuffer[bytesInAccumulator++] = readBuffer[i]
+
+                        // Try to find a header once we have enough bytes
+                        while (bytesInAccumulator >= TelemetryParser.PACKET_SIZE) {
+                            // Check if the current window starts with the header
+                            // Header: 0xFF, 0xFF, 0x54, 0x52
+                            if (accumulationBuffer[0] == 0xFF.toByte() && 
+                                accumulationBuffer[1] == 0xFF.toByte() &&
+                                accumulationBuffer[2] == 0x54.toByte() && 
+                                accumulationBuffer[3] == 0x52.toByte()) {
+                                
+                                val telemetry = TelemetryParser.parse(accumulationBuffer, 0)
+                                if (telemetry != null) {
+                                    _telemetryState.value = telemetry
+                                    onPacketReceived?.invoke(telemetry, true)
+                                } else {
+                                    onPacketReceived?.invoke(null, false)
                                 }
+                                
+                                // Shift buffer left by PACKET_SIZE
+                                System.arraycopy(accumulationBuffer, TelemetryParser.PACKET_SIZE, accumulationBuffer, 0, bytesInAccumulator - TelemetryParser.PACKET_SIZE)
+                                bytesInAccumulator -= TelemetryParser.PACKET_SIZE
+                            } else {
+                                // Not a header at the start, shift by 1 and continue searching
+                                System.arraycopy(accumulationBuffer, 1, accumulationBuffer, 0, bytesInAccumulator - 1)
+                                bytesInAccumulator--
                             }
                         }
                     }

@@ -17,10 +17,40 @@
     <string name="gps_altitude">GPS Altitude</string>
     <string name="gps_no_fix">No GPS fix — awaiting satellite lock</string>
     <string name="imu_sensors">IMU Sensors</string>
-    <string name="accelerometer_g">İvmeölçer (g)</string>
-    <string name="gyroscope_dps">Jiroskop (dps)</string>
+    <string name="accelerometer_g">Accelerometer (g)</string>
+    <string name="gyroscope_dps">Gyroscope (dps)</string>
+    <string name="unit_g">g</string>
+    <string name="unit_dps">dps</string>
     <string name="waiting_for_telemetry">Waiting for first packet…</string>
     <string name="usb_disconnected">Connect a USB-OTG serial adapter</string>
     <string name="meters_label">metres</string>
     <string name="degrees_label">degrees</string>
+    <string name="usb_permission_denied">USB Permission Denied</string>
+    <string name="export_successful">Export successful</string>
+    <string name="export_failed">Export failed: %1$s</string>
+    <string name="no_data_to_export">No data to export</string>
+    <string name="altitude_tared">Altitude Tared to %1$.2fm</string>
+    <string name="no_usb_device_found">No USB device found attached</string>
+    <string name="accel_placeholder">ACCEL ---</string>
+    <string name="gyro_placeholder">GYRO ---</string>
+    <string name="no_data">NO DATA</string>
+    <string name="link_ok">LINK OK</string>
+    <string name="link_degraded">LINK DEGRADED</string>
+    <string name="link_poor">LINK POOR</string>
+    <string name="valid_label">VALID</string>
+    <string name="bad_label">BAD</string>
+    <string name="pps_label">PKT/S</string>
+    <string name="max_altitude_label">MAX %1$.2f m</string>
+    <string name="accel_label">ACCEL</string>
+    <string name="gyro_label">GYRO</string>
+    <string name="connection_details_placeholder">19200 baud · 8N1 · HYİ EK-7</string>
+    <string name="placeholder_dash">---</string>
+    <string name="export_csv_description">Export CSV</string>
+    <string name="tare_altitude_description">Tare Altitude</string>
+
+    <!-- Update Checker -->
+    <string name="update_available_title">Update Available</string>
+    <string name="update_available_message">A new version (%1$s) of Hypermach HYİ is available. Would you like to update?</string>
+    <string name="update_button">Update</string>
+    <string name="dismiss_button">Dismiss</string>
 </resources>
