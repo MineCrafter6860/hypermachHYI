@@ -1,6 +1,6 @@
 # HypermachHYI
 
-> Android ground station for **Hypermach Roket Takımı** — receives, validates, and displays live HYİ EK-7 telemetry over USB OTG in real time.
+> Android ground station for **Hypermach Roket Takımı** — receives, validates, and displays live HYİ telemetry over USB OTG in real time.
 
 ---
 
@@ -15,7 +15,7 @@ The app is designed to be used at the launch site — it keeps the screen on, re
 ## Features
 
 - **USB OTG serial** — auto-detects CP210x, CH340, FTDI, and PL2303 adapters; requests permission and opens the port automatically on plug-in
-- **HYİ EK-7 protocol** — full 78-byte packet validation: header (`FF FF 54 52`), modulo-256 checksum, and footer (`0D 0A`) before any data is accepted
+- **ROKETSAN HYİ protocol** — full 78-byte packet validation: header (`FF FF 54 52`), modulo-256 checksum, and footer (`0D 0A`) before any data is accepted
 - **Stream re-sync** — byte-by-byte accumulator that discards noise and re-locks on the next valid header after corruption
 - **Live dashboard** — altitude, rocket angle, 3-axis accelerometer, 3-axis gyroscope, GPS coordinates, and GPS altitude
 - **Link quality strip** — valid packet count, bad packet count, and live packets-per-second rate with a colour-coded LINK OK / DEGRADED / POOR indicator
