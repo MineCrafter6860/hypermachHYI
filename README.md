@@ -96,12 +96,6 @@ No API keys or external services required.
 
 ---
 
-## Competition Context
-
-Built for **TEKNOFEST** by **Hypermach Roket Takımı** (Ö-UKB division). The receiver firmware runs on a Raspberry Pi Pico paired with an E22-900T30D LoRa module. The transmitter is the rocket's onboard flight computer, also Pico-based, reading from an MPU6050 (IMU) and BME280 (barometric altitude).
-
----
-
 ## License
 
 MIT
